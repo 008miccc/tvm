@@ -56,6 +56,8 @@ jobs:
       - name: Configure and Build
         run: |
           mkdir build && cd build
+          # -lc++fs is required for NDK r21 to support std::filesystem
+          # -latomic is required for 64-bit atomic operations
           cmake .. \
             -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
             -DANDROID_ABI="arm64-v8a" \
@@ -66,16 +68,23 @@ jobs:
             -DUSE_OPENCL=${{ matrix.opencl }} \
             -DUSE_VULKAN=${{ matrix.vulkan }} \
             -DBUILD_SHARED_LIBS=ON \
+            -DCMAKE_SHARED_LINKER_FLAGS="-lc++fs -latomic" \
+            -DCMAKE_EXE_LINKER_FLAGS="-lc++fs -latomic" \
             -G Ninja
+          
           ninja -j 2
 
       - name: Package artifact
         run: |
           mkdir -p artifact
+          # Copy compiled libraries and RPC binaries
           cp build/libtvm_runtime.so artifact/ || true
+          cp build/libtvm.so artifact/ || true
           cp build/apps/cpp_rpc/tvm_rpc artifact/ || true
-          # Find and copy the NDK C++ shared library
+          
+          # Copy the NDK C++ shared library for deployment
           find "$ANDROID_NDK_HOME" -name libc++_shared.so -print -quit | xargs -r -I{} cp {} artifact/ || true
+          
           zip -r artifact.zip artifact
         shell: bash
 
