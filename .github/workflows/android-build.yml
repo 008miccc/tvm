@@ -5,6 +5,10 @@ on:
   push:
     branches: [ main ]
 
+env:
+  ANDROID_PLATFORM: android-26
+  ANDROID_NDK_VERSION: "21.4.7075529"
+
 jobs:
   minimal-runtime:
     runs-on: ubuntu-latest
@@ -15,129 +19,21 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install dependencies
+      - name: Install host deps
         run: |
           sudo apt-get update
           sudo apt-get install -y openjdk-11-jdk wget unzip cmake ninja-build zip
 
-      - name: Setup Android NDK
+      - name: Setup Android SDK/NDK
         run: |
           SDKROOT=$HOME/android-sdk
           mkdir -p $SDKROOT/cmdline-tools
-          curl -fsSL https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip -o /tmp/cmdline.zip
-          unzip -q /tmp/cmdline.zip -d $SDKROOT/cmdline-tools
-          mv $SDKROOT/cmdline-tools/cmdline-tools $SDKROOT/cmdline-tools/latest
-          yes | $SDKROOT/cmdline-tools/latest/bin/sdkmanager --sdk_root=$SDKROOT --install "platform-tools" "platforms;android-26" "ndk;21.4.7075529" "cmake;3.22.1"
+          until curl -fsSL https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip -o /tmp/cmdline.zip; do
+            echo "retrying cmdline-tools download..."
+            sleep 5
+          done
+          unzip -o /tmp/cmdline.zip -d $SDKROOT/cmdline-tools
+          mv $SDKROOT/cmdline-tools/cmdline-tools $SDKROOT/cmdline-tools/latest || true
+          yes | $SDKROOT/cmdline-tools/latest/bin/sdkmanager --sdk_root=$SDKROOT --install "platform-tools" "platforms;android-${ANDROID_PLATFORM#android-}" "ndk;${ANDROID_NDK_VERSION}" "cmake;3.22.1"
           echo "ANDROID_SDK_ROOT=$SDKROOT" >> $GITHUB_ENV
-          echo "ANDROID_NDK_HOME=$SDKROOT/ndk/21.4.7075529" >> $GITHUB_ENV
-
-      - name: Configure build (CPU + RPC only)
-        run: |
-          mkdir -p build-minimal && cd build-minimal
-          cmake .. \
-            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
-            -DANDROID_ABI=arm64-v8a \
-            -DANDROID_PLATFORM=android-26 \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DUSE_CPP_RPC=ON \
-            -DUSE_OPENCL=OFF \
-            -DUSE_VULKAN=OFF \
-            -DBUILD_SHARED_LIBS=ON \
-            -G Ninja
-
-      - name: Build minimal runtime
-        run: |
-          cd build-minimal
-          ninja -j 2
-
-      - name: Upload minimal runtime artifact
-        run: |
-          mkdir -p artifact
-          cp build-minimal/libtvm_runtime.so artifact/ || true
-          cp build-minimal/apps/cpp_rpc/tvm_rpc artifact/ || true
-          zip -r artifact.zip artifact
-        shell: bash
-      - uses: actions/upload-artifact@v4
-        with:
-          name: minimal-runtime
-          path: artifact.zip
-
-  opencl-backend:
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y openjdk-11-jdk wget unzip cmake ninja-build zip
-
-      - name: Setup Android NDK
-        run: |
-          SDKROOT=$HOME/android-sdk
-          mkdir -p $SDKROOT/cmdline-tools
-          curl -fsSL https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip -o /tmp/cmdline.zip
-          unzip -q /tmp/cmdline.zip -d $SDKROOT/cmdline-tools
-          mv $SDKROOT/cmdline-tools/cmdline-tools $SDKROOT/cmdline-tools/latest
-          yes | $SDKROOT/cmdline-tools/latest/bin/sdkmanager --sdk_root=$SDKROOT --install "platform-tools" "platforms;android-26" "ndk;21.4.7075529" "cmake;3.22.1"
-          echo "ANDROID_SDK_ROOT=$SDKROOT" >> $GITHUB_ENV
-          echo "ANDROID_NDK_HOME=$SDKROOT/ndk/21.4.7075529" >> $GITHUB_ENV
-
-      - name: Configure build (OpenCL backend)
-        run: |
-          mkdir -p build-opencl && cd build-opencl
-          cmake .. \
-            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
-            -DANDROID_ABI=arm64-v8a \
-            -DANDROID_PLATFORM=android-26 \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DUSE_CPP_RPC=ON \
-            -DUSE_OPENCL=ON \
-            -DUSE_VULKAN=OFF \
-            -DBUILD_SHARED_LIBS=ON \
-            -G Ninja
-
-      - name: Build OpenCL backend
-        run: |
-          cd build-opencl
-          ninja -j 2
-
-      - name: Upload OpenCL backend artifact
-        run: |
-          mkdir -p artifact
-          cp build-opencl/libtvm_runtime.so artifact/ || true
-          cp build-opencl/apps/cpp_rpc/tvm_rpc artifact/ || true
-          zip -r artifact.zip artifact
-        shell: bash
-      - uses: actions/upload-artifact@v4
-        with:
-          name: opencl-backend
-          path: artifact.zip
-
-  vulkan-backend:
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y openjdk-11-jdk wget unzip cmake ninja-build zip
-
-      - name: Setup Android NDK
-        run: |
-          SDKROOT=$HOME/android-sdk
-          mkdir -p $SDKROOT/cmdline-tools
-          curl -fsSL https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip -o /tmp/cmdline.zip
-          unzip -q /tmp/cmdline.zip -d $SDKROOT/cmdline-tools
-          mv $SDKROOT/cmdline-tools/cmdline-tools $SDKROOT/cmdline-tools/latest
-          yes | $SDKROOT/cmdline-tools/latest/bin/sdkmanager --sdk_root=$SDKROOT --install "platform-tools" "platforms;android-26" "ndk;21.4.7075529" "cmake;3.22.1"
-          echo "ANDROID_SDK_ROOT=$SDKROOT" >> $G
+          echo "ANDROID_NDK_HOME=$
