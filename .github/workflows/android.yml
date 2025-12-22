@@ -51,25 +51,24 @@ jobs:
             -DBUILD_SHARED_LIBS=ON \
             -G Ninja
           
-          # We explicitly build both the runtime library and the RPC executable
+          # We explicitly target the RPC app and the runtime
           ninja -j 2 runtime tvm_rpc
 
       - name: Package artifact
         run: |
           mkdir -p unified_rpc
           
-          # Use find to locate tvm_rpc as the path can vary in cross-compilation
+          # 1. Capture the executable (searching subfolders if necessary)
           find build -name tvm_rpc -type f -exec cp {} unified_rpc/ \;
           
-          # Copy the unified runtime library
-          if [ -f "build/libtvm_runtime.so" ]; then
-            cp build/libtvm_runtime.so unified_rpc/
-          else
-            echo "Error: libtvm_runtime.so not found!" && exit 1
-          fi
+          # 2. Capture EVERY .so file generated (this fixes libtvm_ffi.so)
+          find build -name "*.so" -type f -exec cp {} unified_rpc/ \;
           
-          # Find and copy the NDK C++ shared library
+          # 3. Capture the NDK standard library
           find "$ANDROID_NDK_HOME" -name libc++_shared.so -print -quit | xargs -r -I{} cp {} unified_rpc/
+          
+          # Verification list
+          ls -R unified_rpc/
           
           zip -r android_unified_rpc.zip unified_rpc
         shell: bash
