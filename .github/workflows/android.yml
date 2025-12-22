@@ -13,6 +13,7 @@ jobs:
   build-android-unified:
     name: Build Unified Android RPC (OpenCL + Vulkan)
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -38,7 +39,6 @@ jobs:
       - name: Configure and Build
         run: |
           mkdir build && cd build
-          # We enable both USE_OPENCL and USE_VULKAN in one build
           cmake .. \
             -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
             -DANDROID_ABI="arm64-v8a" \
@@ -51,17 +51,24 @@ jobs:
             -DBUILD_SHARED_LIBS=ON \
             -G Ninja
           
-          # CRITICAL: We explicitly target 'tvm_rpc' and 'runtime'
+          # We explicitly build both the runtime library and the RPC executable
           ninja -j 2 runtime tvm_rpc
 
       - name: Package artifact
         run: |
           mkdir -p unified_rpc
-          # Copy the server executable (found in apps/cpp_rpc within the build dir)
-          cp build/apps/cpp_rpc/tvm_rpc unified_rpc/
+          
+          # Use find to locate tvm_rpc as the path can vary in cross-compilation
+          find build -name tvm_rpc -type f -exec cp {} unified_rpc/ \;
+          
           # Copy the unified runtime library
-          cp build/libtvm_runtime.so unified_rpc/
-          # Copy the NDK helper library
+          if [ -f "build/libtvm_runtime.so" ]; then
+            cp build/libtvm_runtime.so unified_rpc/
+          else
+            echo "Error: libtvm_runtime.so not found!" && exit 1
+          fi
+          
+          # Find and copy the NDK C++ shared library
           find "$ANDROID_NDK_HOME" -name libc++_shared.so -print -quit | xargs -r -I{} cp {} unified_rpc/
           
           zip -r android_unified_rpc.zip unified_rpc
