@@ -6,7 +6,7 @@ on:
     branches: [ main ]
 
 env:
-  ANDROID_PLATFORM: android-26
+  ANDROID_PLATFORM: 26
   ANDROID_NDK_VERSION: "21.4.7075529"
 
 jobs:
@@ -26,14 +26,196 @@ jobs:
 
       - name: Setup Android SDK/NDK
         run: |
-          SDKROOT=$HOME/android-sdk
-          mkdir -p $SDKROOT/cmdline-tools
+          SDKROOT="$HOME/android-sdk"
+          mkdir -p "$SDKROOT/cmdline-tools"
           until curl -fsSL https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip -o /tmp/cmdline.zip; do
             echo "retrying cmdline-tools download..."
             sleep 5
           done
-          unzip -o /tmp/cmdline.zip -d $SDKROOT/cmdline-tools
-          mv $SDKROOT/cmdline-tools/cmdline-tools $SDKROOT/cmdline-tools/latest || true
-          yes | $SDKROOT/cmdline-tools/latest/bin/sdkmanager --sdk_root=$SDKROOT --install "platform-tools" "platforms;android-${ANDROID_PLATFORM#android-}" "ndk;${ANDROID_NDK_VERSION}" "cmake;3.22.1"
+          unzip -o /tmp/cmdline.zip -d "$SDKROOT/cmdline-tools"
+          mv "$SDKROOT/cmdline-tools/cmdline-tools" "$SDKROOT/cmdline-tools/latest" || true
+          yes | "$SDKROOT/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDKROOT" --install "platform-tools" "platforms;android-$ANDROID_PLATFORM" "ndk;$ANDROID_NDK_VERSION" "cmake;3.22.1"
           echo "ANDROID_SDK_ROOT=$SDKROOT" >> $GITHUB_ENV
-          echo "ANDROID_NDK_HOME=$
+          echo "ANDROID_NDK_HOME=$SDKROOT/ndk/$ANDROID_NDK_VERSION" >> $GITHUB_ENV
+
+      - name: Remove host prebuilt libbacktrace
+        run: |
+          if [ -f 3rdparty/tvm-ffi/libbacktrace/lib/libbacktrace.a ]; then
+            rm -f 3rdparty/tvm-ffi/libbacktrace/lib/libbacktrace.a
+            echo "Removed prebuilt libbacktrace.a"
+          fi
+
+      - name: Configure minimal runtime
+        run: |
+          rm -rf build-minimal
+          mkdir build-minimal && cd build-minimal
+          cmake .. \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI="arm64-v8a" \
+            -DANDROID_PLATFORM="$ANDROID_PLATFORM" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DUSE_CPP_RPC=ON \
+            -DUSE_OPENCL=OFF \
+            -DUSE_VULKAN=OFF \
+            -DBUILD_SHARED_LIBS=ON \
+            -G Ninja
+
+      - name: Build minimal runtime
+        run: |
+          cd build-minimal
+          ninja -j 2
+
+      - name: Package minimal artifact
+        run: |
+          mkdir -p artifact
+          cp build-minimal/libtvm_runtime.so artifact/ || true
+          cp build-minimal/apps/cpp_rpc/tvm_rpc artifact/ || true
+          find "$ANDROID_NDK_HOME" -name libc++_shared.so -print -quit | xargs -r -I{} cp {} artifact/ || true
+          zip -r artifact.zip artifact
+        shell: bash
+
+      - name: Upload minimal artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: minimal-runtime
+          path: artifact.zip
+
+  opencl-backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install host deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openjdk-11-jdk wget unzip cmake ninja-build zip
+
+      - name: Setup Android SDK/NDK
+        run: |
+          SDKROOT="$HOME/android-sdk"
+          mkdir -p "$SDKROOT/cmdline-tools"
+          until curl -fsSL https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip -o /tmp/cmdline.zip; do
+            echo "retrying cmdline-tools download..."
+            sleep 5
+          done
+          unzip -o /tmp/cmdline.zip -d "$SDKROOT/cmdline-tools"
+          mv "$SDKROOT/cmdline-tools/cmdline-tools" "$SDKROOT/cmdline-tools/latest" || true
+          yes | "$SDKROOT/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDKROOT" --install "platform-tools" "platforms;android-$ANDROID_PLATFORM" "ndk;$ANDROID_NDK_VERSION" "cmake;3.22.1"
+          echo "ANDROID_SDK_ROOT=$SDKROOT" >> $GITHUB_ENV
+          echo "ANDROID_NDK_HOME=$SDKROOT/ndk/$ANDROID_NDK_VERSION" >> $GITHUB_ENV
+
+      - name: Remove host prebuilt libbacktrace
+        run: |
+          if [ -f 3rdparty/tvm-ffi/libbacktrace/lib/libbacktrace.a ]; then
+            rm -f 3rdparty/tvm-ffi/libbacktrace/lib/libbacktrace.a
+            echo "Removed prebuilt libbacktrace.a"
+          fi
+
+      - name: Configure OpenCL backend
+        run: |
+          rm -rf build-opencl
+          mkdir build-opencl && cd build-opencl
+          cmake .. \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI="arm64-v8a" \
+            -DANDROID_PLATFORM="$ANDROID_PLATFORM" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DUSE_CPP_RPC=ON \
+            -DUSE_OPENCL=ON \
+            -DUSE_VULKAN=OFF \
+            -DBUILD_SHARED_LIBS=ON \
+            -G Ninja
+
+      - name: Build OpenCL backend
+        run: |
+          cd build-opencl
+          ninja -j 2
+
+      - name: Package OpenCL artifact
+        run: |
+          mkdir -p artifact
+          cp build-opencl/libtvm_runtime.so artifact/ || true
+          cp build-opencl/apps/cpp_rpc/tvm_rpc artifact/ || true
+          find "$ANDROID_NDK_HOME" -name libc++_shared.so -print -quit | xargs -r -I{} cp {} artifact/ || true
+          zip -r artifact.zip artifact
+        shell: bash
+
+      - name: Upload OpenCL artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: opencl-backend
+          path: artifact.zip
+
+  vulkan-backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install host deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openjdk-11-jdk wget unzip cmake ninja-build zip
+
+      - name: Setup Android SDK/NDK
+        run: |
+          SDKROOT="$HOME/android-sdk"
+          mkdir -p "$SDKROOT/cmdline-tools"
+          until curl -fsSL https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip -o /tmp/cmdline.zip; do
+            echo "retrying cmdline-tools download..."
+            sleep 5
+          done
+          unzip -o /tmp/cmdline.zip -d "$SDKROOT/cmdline-tools"
+          mv "$SDKROOT/cmdline-tools/cmdline-tools" "$SDKROOT/cmdline-tools/latest" || true
+          yes | "$SDKROOT/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDKROOT" --install "platform-tools" "platforms;android-$ANDROID_PLATFORM" "ndk;$ANDROID_NDK_VERSION" "cmake;3.22.1"
+          echo "ANDROID_SDK_ROOT=$SDKROOT" >> $GITHUB_ENV
+          echo "ANDROID_NDK_HOME=$SDKROOT/ndk/$ANDROID_NDK_VERSION" >> $GITHUB_ENV
+
+      - name: Remove host prebuilt libbacktrace
+        run: |
+          if [ -f 3rdparty/tvm-ffi/libbacktrace/lib/libbacktrace.a ]; then
+            rm -f 3rdparty/tvm-ffi/libbacktrace/lib/libbacktrace.a
+            echo "Removed prebuilt libbacktrace.a"
+          fi
+
+      - name: Configure Vulkan backend
+        run: |
+          rm -rf build-vulkan
+          mkdir build-vulkan && cd build-vulkan
+          cmake .. \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI="arm64-v8a" \
+            -DANDROID_PLATFORM="$ANDROID_PLATFORM" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DUSE_CPP_RPC=ON \
+            -DUSE_OPENCL=OFF \
+            -DUSE_VULKAN=ON \
+            -DBUILD_SHARED_LIBS=ON \
+            -G Ninja
+
+      - name: Build Vulkan backend
+        run: |
+          cd build-vulkan
+          ninja -j 2
+
+      - name: Package Vulkan artifact
+        run: |
+          mkdir -p artifact
+          cp build-vulkan/libtvm_runtime.so artifact/ || true
+          cp build-vulkan/apps/cpp_rpc/tvm_rpc artifact/ || true
+          find "$ANDROID_NDK_HOME" -name libc++_shared.so -print -quit | xargs -r -I{} cp {} artifact/ || true
+          zip -r artifact.zip artifact
+        shell: bash
+
+      - name: Upload Vulkan artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vulkan-backend
+          path: artifact.zip
