@@ -1,0 +1,70 @@
+name: android-tvm-build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  build-android-minimal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openjdk-11-jdk wget unzip cmake ninja-build zip
+
+      - name: Download Android commandline tools and NDK 29
+        run: |
+          SDKROOT=$HOME/android-sdk
+          mkdir -p $SDKROOT/cmdline-tools
+          curl -fsSL https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip -o /tmp/cmdline.zip
+          unzip -q /tmp/cmdline.zip -d $SDKROOT/cmdline-tools
+          mv $SDKROOT/cmdline-tools/cmdline-tools $SDKROOT/cmdline-tools/latest
+          yes | $SDKROOT/cmdline-tools/latest/bin/sdkmanager --sdk_root=$SDKROOT --install "platform-tools" "platforms;android-26" "ndk;21.4.7075529" "cmake;3.22.1"
+          echo "ANDROID_SDK_ROOT=$SDKROOT" >> $GITHUB_ENV
+          echo "ANDROID_NDK_HOME=$SDKROOT/ndk/21.4.7075529" >> $GITHUB_ENV
+
+      - name: Configure build (minimal runtime)
+        run: |
+          mkdir -p build-android && cd build-android
+          cmake .. \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-26 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DUSE_CPP_RPC=ON \
+            -DUSE_OPENCL=OFF \
+            -DUSE_VULKAN=OFF \
+            -DBUILD_SHARED_LIBS=ON \
+            -G Ninja
+
+      - name: Build (minimal runtime)
+        run: |
+          cd build-android
+          ninja -j 2
+
+      - name: Package artifacts
+        run: |
+          mkdir -p artifact
+          # adjust these paths if CMake uses different output layout
+          cp build-android/libtvm_runtime.so artifact/ || true
+          cp build-android/apps/cpp_rpc/tvm_rpc artifact/ || true
+          # Also copy APK if present (from apps/android_rpc build)
+          if [ -f apps/android_rpc/app/build/outputs/apk/debug/app-debug.apk ]; then
+            cp apps/android_rpc/app/build/outputs/apk/debug/app-debug.apk artifact/ || true
+          fi
+          ls -l artifact
+          zip -r artifact.zip artifact
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-tvm-artifact
+          path: artifact.zip
