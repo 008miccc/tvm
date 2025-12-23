@@ -5,54 +5,60 @@ on:
 
 jobs:
   build-linux:
-    runs-on: ubuntu-latest # Uses the fastest available standard runner (usually 4-core)
+    runs-on: ubuntu-latest
     
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
+          fetch-depth: 0 # Ensures all history/tags are available for versioning
 
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y python3-dev python3-pip python3-setuptools python3-wheel \
-                               cmake ninja-build llvm-dev libtinfo-dev zlib1g-dev libedit-dev ccache
+          sudo apt-get install -y python3-dev python3-pip cmake ninja-build \
+                               llvm-dev libtinfo-dev zlib1g-dev libedit-dev ccache
 
-      # 1. Caching the C++ build (Saves ~15-30 mins on subsequent runs)
-      - name: ccache
+      # 1. ccache Setup: This persists your compiled objects across runs
+      - name: Setup ccache
         uses: hendrikmuhs/ccache-action@v1.2
         with:
-          key: ${{ runner.os }}-tvm-build
-          max-size: 2G
+          key: ${{ runner.os }}-tvm-ccache
+          max-size: 2G # TVM is large; 2GB is a safe buffer
 
-      - name: Configure TVM build
+      - name: Configure TVM
         run: |
-          mkdir build
+          mkdir -p build
           cp cmake/config.cmake build/ || true
           cd build
-          # Enable CMAKE_CXX_COMPILER_LAUNCHER for ccache speedup
+          # Use ccache as a compiler launcher for speed
           cmake -G Ninja .. \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DUSE_LLVM=ON \
             -DUSE_RPC=ON \
-            -DUSE_GRAPH_EXECUTOR=ON \
-            -DUSE_LIBBACKTRACE=OFF
+            -DUSE_GRAPH_EXECUTOR=ON
             
       - name: Build TVM C++ core
         run: |
           cd build
-          # Dynamically use all available cores (nproc) 
-          # GitHub standard runners have 4 cores; -j4 is ideal here.
+          # $(nproc) uses all 4 cores provided by GitHub
           ninja -j $(nproc)
 
       - name: Build and package Python wheel
         env:
+          # Crucial: Tells the wheel where the .so files are
           TVM_LIBRARY_PATH: ${{ github.workspace }}/build
         run: |
           python3 -m pip install --upgrade pip wheel setuptools
+          
+          # Fix the "No such file" error:
+          # We enter the 'python' directory where setup.py actually lives.
           cd python
           python3 setup.py bdist_wheel
+          
+          # Move result to workspace for artifact upload
           mkdir -p ../wheel-linux
           cp dist/*.whl ../wheel-linux/
 
