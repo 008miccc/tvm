@@ -47,4 +47,3 @@ jobs:
         with:
           name: tvm-linux-wheel
           path: wheel-linux/*.whl
-YAML
