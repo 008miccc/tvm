@@ -1,12 +1,12 @@
-name: TVM Linux Wheel
+name: TVM Linux Wheel (High Performance)
 
 on:
   workflow_dispatch:
 
 jobs:
   build-linux:
-    runs-on: ubuntu-22.04
-
+    runs-on: ubuntu-latest # Uses the fastest available standard runner (usually 4-core)
+    
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -15,40 +15,46 @@ jobs:
 
       - name: Install system dependencies
         run: |
-          sudo apt update
-          sudo apt install -y python3-dev python3-pip python3-setuptools python3-wheel \
-                             cmake ninja-build llvm-dev libtinfo-dev zlib1g-dev libedit-dev
+          sudo apt-get update
+          sudo apt-get install -y python3-dev python3-pip python3-setuptools python3-wheel \
+                               cmake ninja-build llvm-dev libtinfo-dev zlib1g-dev libedit-dev ccache
+
+      # 1. Caching the C++ build (Saves ~15-30 mins on subsequent runs)
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ${{ runner.os }}-tvm-build
+          max-size: 2G
 
       - name: Configure TVM build
         run: |
           mkdir build
           cp cmake/config.cmake build/ || true
           cd build
+          # Enable CMAKE_CXX_COMPILER_LAUNCHER for ccache speedup
           cmake -G Ninja .. \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DUSE_LLVM=ON \
             -DUSE_RPC=ON \
-            -DUSE_GRAPH_EXECUTOR=ON
-
+            -DUSE_GRAPH_EXECUTOR=ON \
+            -DUSE_LIBBACKTRACE=OFF
+            
       - name: Build TVM C++ core
         run: |
           cd build
-          ninja -j 2
+          # Dynamically use all available cores (nproc) 
+          # GitHub standard runners have 4 cores; -j4 is ideal here.
+          ninja -j $(nproc)
 
       - name: Build and package Python wheel
+        env:
+          TVM_LIBRARY_PATH: ${{ github.workspace }}/build
         run: |
           python3 -m pip install --upgrade pip wheel setuptools
-          # Locate setup.py in the repo
-          SETUP_PY=$(find . -maxdepth 4 -type f -name setup.py | head -n 1 || true)
-          if [ -z "$SETUP_PY" ]; then
-            echo "ERROR: no setup.py found in repo; aborting"
-            exit 1
-          fi
-          SETUP_DIR=$(dirname "$SETUP_PY")
-          echo "Found setup.py at: $SETUP_PY (dir: $SETUP_DIR)"
-          cd "$SETUP_DIR"
+          cd python
           python3 setup.py bdist_wheel
-          mkdir -p "$GITHUB_WORKSPACE/wheel-linux"
-          cp dist/*.whl "$GITHUB_WORKSPACE/wheel-linux/" || true
+          mkdir -p ../wheel-linux
+          cp dist/*.whl ../wheel-linux/
 
       - name: Upload wheel artifact
         uses: actions/upload-artifact@v4
