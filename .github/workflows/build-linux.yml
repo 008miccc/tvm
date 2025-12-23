@@ -1,51 +1,65 @@
-name: TVM Linux Wheel (Fork Optimized)
+name: Build TVM Linux Wheel
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: # Allows manual execution
 
 jobs:
   build-linux:
     runs-on: ubuntu-latest
     
     steps:
-      - name: Checkout repository
+      # 1. Checkout with submodules (Critical for TVM)
+      - name: Checkout Repository
         uses: actions/checkout@v4
         with:
-          # REQUIRED for forks: ensures 3rdparty libraries are present
           submodules: recursive
           fetch-depth: 0
 
+      # 2. Pre-Flight Checks
+      # This step verifies the environment before starting the heavy work.
       - name: Pre-Flight Check
         run: |
-          echo "Checking directory structure..."
-          pwd
-          if [ -f "python/setup.py" ]; then
-            echo "✅ Found setup.py in python/ directory"
+          echo "=== Starting Pre-Flight Checks ==="
+          echo "Current Directory: $(pwd)"
+          
+          # Check for Python folder and setup.py
+          if [ -d "python" ] && [ -f "python/setup.py" ]; then
+            echo "✅ Python directory and setup.py found."
           else
-            echo "❌ ERROR: setup.py not found! Searching repo..."
-            find . -name "setup.py"
+            echo "❌ ERROR: python/setup.py not found. Check if fork is complete."
             exit 1
           fi
 
-      - name: Install system dependencies
+          # Check for submodules (3rdparty should not be empty)
+          if [ "$(ls -A 3rdparty/dmlc-core 2>/dev/null)" ]; then
+            echo "✅ Submodules appear to be initialized."
+          else
+            echo "❌ ERROR: Submodules missing. Ensure 'submodules: recursive' is used."
+            exit 1
+          fi
+          echo "=== Pre-Flight Checks Passed ==="
+
+      # 3. Install System Dependencies
+      - name: Install Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y python3-dev python3-pip cmake ninja-build \
                                llvm-dev libtinfo-dev zlib1g-dev libedit-dev ccache
 
+      # 4. Setup C++ Cache
       - name: Setup ccache
         uses: hendrikmuhs/ccache-action@v1.2
         with:
-          # Unique key for your fork to prevent cache pollution
-          key: ${{ runner.os }}-tvm-fork-${{ github.repository_owner }}
+          key: ${{ runner.os }}-tvm-ccache
           max-size: 2G
 
+      # 5. Configure Build
       - name: Configure TVM
         run: |
           mkdir -p build
           cp cmake/config.cmake build/ || true
           cd build
-          # Use ccache to 'continue' builds and save time
+          # Use ccache to ensure we can 'continue' builds faster next time
           cmake -G Ninja .. \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
@@ -53,29 +67,27 @@ jobs:
             -DUSE_RPC=ON \
             -DUSE_GRAPH_EXECUTOR=ON
             
-      - name: Build TVM C++ core
+      # 6. Compile C++ Core
+      - name: Build C++ Core
         run: |
           cd build
-          # Uses all 4 cores available for maximum speed
           ninja -j $(nproc)
 
-      - name: Build and package Python wheel
+      # 7. Create Python Wheel
+      - name: Build Wheel
         env:
-          # REQUIRED: Tells the wheel installer where to find the .so files
           TVM_LIBRARY_PATH: ${{ github.workspace }}/build
         run: |
           python3 -m pip install --upgrade pip wheel setuptools
-          
-          # Navigate to the subdirectory where setup.py actually lives
           cd python
           python3 setup.py bdist_wheel
           
-          # Move result to a clean workspace folder for upload
-          mkdir -p ${{ github.workspace }}/wheel-linux
-          cp dist/*.whl ${{ github.workspace }}/wheel-linux/
+          mkdir -p ../dist-out
+          cp dist/*.whl ../dist-out/
 
-      - name: Upload wheel artifact
+      # 8. Upload Result
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: tvm-linux-wheel
-          path: wheel-linux/*.whl
+          path: dist-out/*.whl
