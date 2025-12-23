@@ -22,9 +22,9 @@ jobs:
       - name: Configure TVM build
         run: |
           mkdir build
-          cp tvm/cmake/config.cmake build/ || true
+          cp cmake/config.cmake build/    # <-- correct path
           cd build
-          cmake -G Ninja ../tvm \
+          cmake -G Ninja .. \
             -DUSE_LLVM=ON \
             -DUSE_RPC=ON \
             -DUSE_GRAPH_EXECUTOR=ON
@@ -37,13 +37,13 @@ jobs:
       - name: Build and package Python wheel
         run: |
           python3 -m pip install --upgrade pip wheel setuptools
-          cd tvm/python
+          cd python                         # <-- correct path (root/python)
           python3 setup.py bdist_wheel
-          mkdir -p ../../wheel-linux
-          cp dist/*.whl ../../wheel-linux/ || true
+          mkdir -p ../wheel-linux
+          cp dist/*.whl ../wheel-linux/ || true
 
       - name: Upload wheel artifact
         uses: actions/upload-artifact@v4
         with:
           name: tvm-linux-wheel
-          path: wheel-linux/*.whl
+          path: build/wheel-linux/*.whl
