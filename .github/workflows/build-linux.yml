@@ -8,7 +8,7 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
@@ -22,7 +22,7 @@ jobs:
       - name: Configure TVM build
         run: |
           mkdir build
-          cp cmake/config.cmake build/    # <-- correct path
+          cp cmake/config.cmake build/ || true
           cd build
           cmake -G Ninja .. \
             -DUSE_LLVM=ON \
@@ -37,13 +37,21 @@ jobs:
       - name: Build and package Python wheel
         run: |
           python3 -m pip install --upgrade pip wheel setuptools
-          cd python                         # <-- correct path (root/python)
+          # Locate setup.py in the repo
+          SETUP_PY=$(find . -maxdepth 4 -type f -name setup.py | head -n 1 || true)
+          if [ -z "$SETUP_PY" ]; then
+            echo "ERROR: no setup.py found in repo; aborting"
+            exit 1
+          fi
+          SETUP_DIR=$(dirname "$SETUP_PY")
+          echo "Found setup.py at: $SETUP_PY (dir: $SETUP_DIR)"
+          cd "$SETUP_DIR"
           python3 setup.py bdist_wheel
-          mkdir -p ../wheel-linux
-          cp dist/*.whl ../wheel-linux/ || true
+          mkdir -p "$GITHUB_WORKSPACE/wheel-linux"
+          cp dist/*.whl "$GITHUB_WORKSPACE/wheel-linux/" || true
 
       - name: Upload wheel artifact
         uses: actions/upload-artifact@v4
         with:
           name: tvm-linux-wheel
-          path: build/wheel-linux/*.whl
+          path: wheel-linux/*.whl
